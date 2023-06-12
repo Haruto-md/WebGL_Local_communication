@@ -42,7 +42,6 @@ public class AudioTranscripter : MonoBehaviour
     {
         isRecording = false;
         Microphone.End(null);
-        SaveAudioClipToWavFile("temp.wav");
 #if UNITY_EDITOR
         // Unity Editorのときの処理
         // ここにUnity Editorでの特定の挙動を記述します
@@ -60,55 +59,7 @@ public class AudioTranscripter : MonoBehaviour
         whisperAPI.respondedText = null;
 
     }
-    IEnumerator LoadTextFile(string filePath)
-    {
-        UnityWebRequest www = UnityWebRequest.Get(filePath);
-        yield return www.SendWebRequest();
-        Debug.Log(www.result.ToString());
-        openai_api_key = www.downloadHandler.text;
-    }
-    // AudioClipをbyte[]に変換する
-    public void SaveAudioClipToWavFile(string filePath)
-    {
-        // AudioClipをバイト配列に変換する
-        float[] samples = new float[audioClip.samples];
-        audioClip.GetData(samples, 0);
 
-        byte[] byteArray = new byte[samples.Length * 2];
-        int sampleIndex = 0;
-        for (int i = 0; i < byteArray.Length; i += 2)
-        {
-            short shortValue = (short)(samples[sampleIndex] * 32767f);
-            byteArray[i] = (byte)(shortValue & 0xff);
-            byteArray[i + 1] = (byte)((shortValue >> 8) & 0xff);
-            sampleIndex++;
-        }
-
-        // ファイルに書き込む
-        string path = Path.Combine(Application.streamingAssetsPath, filePath);
-        using (var fileStream = new FileStream(path, FileMode.Create))
-        using (var writer = new BinaryWriter(fileStream))
-        {
-            // ファイルヘッダーの書き込み
-            writer.Write(new char[4] { 'R', 'I', 'F', 'F' });
-            writer.Write(byteArray.Length + 36);
-            writer.Write(new char[8] { 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ' });
-            writer.Write(16);
-            writer.Write((short)1);
-            writer.Write((short)1);
-            writer.Write(audioClip.frequency);
-            writer.Write(audioClip.frequency * 2);
-            writer.Write((short)2);
-            writer.Write((short)16);
-            writer.Write(new char[4] { 'd', 'a', 't', 'a' });
-            writer.Write(byteArray.Length);
-
-            // データの書き込み
-            writer.Write(byteArray);
-        }
-
-        Debug.Log("AudioClip saved as wav file at: " + path);
-    }
     public static byte[] AudioClipToByteArray(AudioClip clip)
     {
         float[] samples = new float[clip.samples];
@@ -120,6 +71,7 @@ public class AudioTranscripter : MonoBehaviour
 
         return byteArray;
     }
+    // AudioClipをbyte[]に変換する
 }
 
 public class WhisperAPI
