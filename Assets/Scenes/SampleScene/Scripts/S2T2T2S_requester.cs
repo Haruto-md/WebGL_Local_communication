@@ -3,19 +3,21 @@ using System.Collections;
 using System;
 using System.Text;
 using UnityEngine.UI;
-using Newtonsoft.Json;
+using System.Collections.Generic;
 using UnityEngine.Networking;
+using My.Communication;
 
 public class S2T2T2S_requester : MonoBehaviour
 {
     [SerializeField] private AudioClip audioClip;
     [SerializeField] private int frequency = 16000;
-    [SerializeField] public string[] chatJsonFile;
+    [SerializeField] public TextAsset textAsset;
     
     public string url;
-    private AudioClip[] audioClips;
+    public List<AudioClip> receivedAudioClips = null;
     private AudioSource audioSource;
     private bool isRecording = false;
+    public bool isRequesting = false;
     public Button recordButton;
 
     // Start is called before the first frame update
@@ -42,146 +44,119 @@ public class S2T2T2S_requester : MonoBehaviour
     void StartRecording()
     {
         isRecording = true;
+        Debug.Log(Microphone.devices[0]);
         audioClip = Microphone.Start(Microphone.devices[0], true, 15, frequency);
     }
 
     void StopRecording()
     {
         isRecording = false;
+        recordButton.interactable = false;
         Microphone.End(Microphone.devices[0]);
-        var result = StartCoroutine(ComunicateAPI());
+        StartCoroutine(ComunicateAPI());
         Debug.Log("requested maybe");
     }
     
     IEnumerator ComunicateAPI()
     {
-        // テキストデータのシリアライズ
-        string chat_data = JsonConvert.SerializeObject(chatJsonFile);
-
-        byte[] text_binary_Data = Encoding.UTF8.GetBytes(chat_data);
-        byte[] TA_delimiter = Encoding.UTF8.GetBytes("===Text_Audio_Delimiter===");
         float[] audioData = new float[audioClip.samples];
         audioClip.GetData(audioData, 0);
+        // バイト配列に変換
+        byte[] audioBinaryData = new byte[audioData.Length * 4];  // floatは4バイト
+        Buffer.BlockCopy(audioData, 0, audioBinaryData, 0, audioBinaryData.Length);
 
-        byte[] AS_delimiter = Encoding.UTF8.GetBytes("===Audio_SR_Delimiter===");
-        byte[] sampling_rate = BitConverter.GetBytes(frequency);
-        byte[] END_delimiter = Encoding.UTF8.GetBytes("===END===");
+        var form = new WWWForm();
+        form.AddField("role1","user");
+        form.AddField("content1", textAsset.text);
+        form.AddField("sampling_rate", audioClip.frequency);
 
-        byte[] binary_data = new byte[text_binary_Data.Length + TA_delimiter.Length + audioData.Length * 4 + AS_delimiter.Length + sampling_rate.Length];
-        int offset = 0;
+        form.AddBinaryData("audio_data", audioBinaryData, "audio.wav", "audio/wav");
 
-        Array.Copy(text_binary_Data, 0, binary_data, offset, text_binary_Data.Length);
-        offset += text_binary_Data.Length;
+        // UnityWebRequestを作成し、FormDataを設定
+        UnityWebRequest request = UnityWebRequest.Post(url, form);
+        request.downloadHandler = new StreamingDownloadHandler(this.gameObject);
 
-        Array.Copy(TA_delimiter, 0, binary_data, offset, TA_delimiter.Length);
-        offset += TA_delimiter.Length;
-
-        Buffer.BlockCopy(audioData, 0, binary_data, offset, audioData.Length * 4);
-        offset += audioData.Length * 4;
-
-        Array.Copy(AS_delimiter, 0, binary_data, offset, AS_delimiter.Length);
-        offset += AS_delimiter.Length;
-
-        Array.Copy(sampling_rate, 0, binary_data, offset, sampling_rate.Length);
-
-        UnityWebRequest request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST);
-        UploadHandlerRaw uploadHandler = new UploadHandlerRaw(binary_data);
-        request.uploadHandler = uploadHandler;
-        request.downloadHandler = new DownloadHandlerBuffer();
-        //request.SetRequestHeader("Content-Type", "application/octet-stream");
-
-        // リクエストの送信
+        // リクエストを送信し、レスポンスを待機
+        isRequesting = true;
         yield return request.SendWebRequest();
 
-        var respondedBinaryData = new byte[] { };
-        var audioDataBinary = new byte[] { };
-        while (!request.isDone)
+        if (request.result != UnityWebRequest.Result.Success)
         {
-            byte[] chunk = request.downloadHandler.data;
-            Array.Copy(chunk, 0, respondedBinaryData, 0, chunk.Length);
-
-            byte[][] result = SplitBinaryData(respondedBinaryData, END_delimiter);
-            if (result is not null)
-            {
-                // 分割された結果を正しく処理する
-                audioDataBinary = result[0];
-                respondedBinaryData = result[1];
-            }
-
-            byte[][] audioResult = SplitBinaryData(audioDataBinary, AS_delimiter);
-            if (audioResult is not null)
-            {
-                audioDataBinary = audioResult[0];
-                byte[] samplingRateBinary = audioResult[1];
-
-                int samplingRate = BitConverter.ToInt32(samplingRateBinary, 0);
-                float[] respondedAudioData = DecodeAudioData(audioDataBinary);
-                AudioClip[] singleAudioClip = new AudioClip[]{ CreateAudioClip(respondedAudioData, samplingRate)};
-                Array.Copy(singleAudioClip,0, audioClips, audioClips.Length,1);
-            }
-
-        }
-        yield return null;
-    }
-    IEnumerator PlaySpeech(AudioClip audioClip)
-    {
-        audioSource.clip = audioClip;
-        audioSource.Play();
-        
-        yield return 0;
-    }
-    byte[][] SplitBinaryData(byte[] binaryData, byte[] delimiter)
-    {
-        var binaryList = new byte[2][];
-        int delimiterIndex = IndexOfDelimiter(binaryData, delimiter);
-        if (delimiterIndex != -1)
-        {
-            Array.Copy(binaryData, 0, binaryList[1], 0, delimiterIndex + 1);
-            Array.Copy(binaryData, 0, binaryList[2], 0, binaryData.Length - delimiterIndex - 1);
-            return binaryList;
+            Debug.Log(request.error);
         }
         else
         {
-            return null;
+            isRequesting = false;
+            Debug.Log("request complete!");
+            recordButton.interactable = true;
         }
-
     }
 
-    int IndexOfDelimiter(byte[] data, byte[] delimiter)
+    public IEnumerator playAudioSequentially()
     {
-        for (int i = 0; i < data.Length - delimiter.Length + 1; i++)
+        yield return null;
+
+        //1.Loop through each AudioClip
+        for (int i = 0;isRequesting==true&&i< receivedAudioClips.Count; i++)
         {
-            bool found = true;
-            for (int j = 0; j < delimiter.Length; j++)
+            Debug.Log("Playing a Clip, index: " + i);
+            var currentAudioClip = receivedAudioClips[i];
+            audioSource.clip = currentAudioClip;
+            //3.Play Audio
+            audioSource.Play();
+
+            //4.Wait for it to finish playing
+            while (audioSource.isPlaying)
             {
-                if (data[i + j] != delimiter[j])
-                {
-                    found = false;
-                    break;
-                }
+                yield return null;
             }
-
-            if (found)
-                return i;
+            while (receivedAudioClips.Count - 1 <= i && isRequesting)
+            {
+                yield return null;
+            }
+            
         }
-
-        return -1;
-    }
-
-
-    float[] DecodeAudioData(byte[] audioData)
+        Debug.Log("Finish Playing");
+        receivedAudioClips = null;
+}
+}
+namespace My.Communication
+{
+    [System.Serializable]
+    public class AudioClipData
     {
-        // バイナリデータをfloat配列に変換する処理
-        float[] decodedAudioData = new float[audioData.Length / 4];
-        Buffer.BlockCopy(audioData, 0, decodedAudioData, 0, audioData.Length);
-        return decodedAudioData;
+        public float[] audio_sample_data;
     }
-
-    AudioClip CreateAudioClip(float[] audioData,int sampleRate)
+    public class StreamingDownloadHandler : DownloadHandlerScript
     {
-        // float配列からAudioClipを生成する処理
-        AudioClip audioClip = AudioClip.Create("YourAudioClip", audioData.Length, 1, sampleRate, false);
-        audioClip.SetData(audioData, 0);
-        return audioClip;
+        S2T2T2S_requester requester;
+        bool isStartedPlayList = false;
+        public StreamingDownloadHandler(GameObject gameObject)
+        {
+            this.requester = gameObject.GetComponent<S2T2T2S_requester>();
+        }
+        protected override bool ReceiveData(byte[] data, int dataLength)
+        {
+            float[] samples = new float[data.Length / 4];
+            Buffer.BlockCopy(data,0,samples,0,data.Length);
+            int samplingRate = 20500;
+            AudioClip singleAudioClip = CreateAudioClip(samples, samplingRate);
+            requester.receivedAudioClips.Add(singleAudioClip);
+
+            Debug.Log("Extend audioClips.");
+            if (!isStartedPlayList)
+            {
+                requester.StartCoroutine(requester.playAudioSequentially());
+                isStartedPlayList = true;
+            }
+            return base.ReceiveData(data, dataLength);
+        }
+        AudioClip CreateAudioClip(float[] audioData, int samplingRate)
+        {
+            // float配列からAudioClipを生成する処理
+            AudioClip audioClip = AudioClip.Create("receivedAudioClip_" + Time.time, audioData.Length, 1, samplingRate, false);
+            audioClip.SetData(audioData, 0);
+            return audioClip;
+        }
     }
 }
